@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>食安特警：消滅病原菌大作戰</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700;900&family=Fredoka+One&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+            overflow: hidden;
+            background-color: #0f172a;
+        }
+        .font-num {
+            font-family: 'Fredoka One', 'Noto Sans TC', sans-serif;
+        }
+        /* 鏡像翻轉鏡頭畫面，讓玩家如同照鏡子一般自然互動 */
+        .mirror-video {
+            transform: scaleX(-1);
+        }
+        @keyframes pulse-fast {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        .animate-hit-pop {
+            animation: hitPop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        @keyframes hitPop {
+            0% { transform: scale(0.6); opacity: 0; }
+            70% { transform: scale(1.15); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes splat {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(1.8); opacity: 0; }
+        }
+        .splat-fx {
+            animation: splat 0.4s ease-out forwards;
+        }
+    </style>
+</head>
+<body class="relative w-screen h-screen bg-slate-950 text-white select-none">
+
+    <!-- 隱藏的即時視訊輸入與分析緩衝區 -->
+    <video id="webcam" class="hidden" autoplay playsinline webkit-playsinline muted></video>
+    <canvas id="motionCanvas" class="hidden"></canvas>
+
+    <!-- 主遊戲畫面：包含鏡像攝影鏡頭渲染與病毒繪圖圖層 -->
+    <div id="gameViewport" class="relative w-full h-full flex items-center justify-center overflow-hidden">
+        <!-- 畫布：繪製攝影鏡頭視訊 + 飄浮病毒 + 體感觸發光圈 + 粒子爆破效果 -->
+        <canvas id="displayCanvas" class="w-full h-full object-cover"></canvas>
+        
+        <!-- 頂部即時儀表板 HUD (大螢幕清晰呈現) -->
+        <header id="gameHUD" class="absolute top-0 left-0 w-full px-6 py-4 flex justify-between items-center pointer-events-none z-20 transition-all duration-300">
+            <!-- 得分與連擊 -->
+            <div class="flex items-center space-x-4 bg-slate-900/80 backdrop-blur-md px-5 py-3 rounded-2xl border-2 border-emerald-500/50 shadow-lg">
+                <div class="text-3xl">🛡️</div>
+                <div>
+                    <div class="text-xs uppercase font-bold tracking-wider text-emerald-400">食安守護積分</div>
+                    <div id="scoreLabel" class="text-4xl md:text-5xl font-num font-black text-amber-300 drop-shadow">0</div>
+                </div>
+                <div id="comboBadge" class="hidden ml-2 bg-gradient-to-r from-orange-500 to-amber-500 text-white font-num font-bold px-3 py-1 rounded-full text-sm animate-bounce shadow">
+                    COMBO x<span id="comboVal">1</span>
+                </div>
+            </div>
+
+            <!-- 食安常識跑馬標語 -->
+            <div class="hidden lg:flex items-center bg-slate-900/70 backdrop-blur px-6 py-2.5 rounded-full border border-sky-500/30 text-sky-200 text-base font-semibold shadow">
+                <span class="mr-2">💡</span>
+                <span id="tipBanner">勤洗手、生熟食分開、徹底加熱至75°C以上！</span>
+            </div>
+
+            <!-- 倒數計時器與控制按鈕 -->
+            <div class="flex items-center space-x-3 pointer-events-auto">
+                <div class="flex items-center space-x-3 bg-slate-900/80 backdrop-blur-md px-5 py-3 rounded-2xl border-2 border-rose-500/50 shadow-lg">
+                    <div class="text-3xl">⏱️</div>
+                    <div>
+                        <div class="text-xs uppercase font-bold tracking-wider text-rose-400">剩餘秒數</div>
+                        <div id="timeLabel" class="text-4xl md:text-5xl font-num font-black text-rose-300">30</div>
+                    </div>
+                </div>
+                <button id="toggleSoundBtn" class="bg-slate-800/80 hover:bg-slate-700 text-white p-3.5 rounded-2xl border border-slate-600 shadow-md text-xl" title="切換音效">
+                    🔊
+                </button>
+            </div>
+        </header>
+
+        <!-- 體感靈敏度微型指示條 (方便工作人員確認現場動作偵測狀態) -->
+        <div class="absolute bottom-4 left-6 z-20 pointer-events-none bg-slate-900/70 backdrop-blur px-4 py-2 rounded-xl border border-slate-700/60 flex items-center space-x-2 text-xs">
+            <span class="text-emerald-400 font-bold">體感感應中</span>
+            <div class="w-24 h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-600">
+                <div id="motionMeter" class="w-0 h-full bg-gradient-to-r from-emerald-500 via-yellow-400 to-rose-500 transition-all duration-75"></div>
+            </div>
+        </div>
+
+        <!-- 遊戲開始 / 準備畫面 Overlay -->
+        <div id="startModal" class="absolute inset-0 z-30 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-6 transition-all">
+            <div class="max-w-xl w-full bg-gradient-to-b from-slate-900 to-slate-800 border-2 border-emerald-500/60 rounded-3xl p-8 text-center shadow-2xl relative overflow-hidden">
+                <!-- 裝飾背景光芒 -->
+                <div class="absolute -top-20 -left-20 w-44 h-44 bg-emerald-500/20 rounded-full blur-3xl pointer-events-none"></div>
+                <div class="absolute -bottom-20 -right-20 w-44 h-44 bg-sky-500/20 rounded-full blur-3xl pointer-events-none"></div>
+
+                <div class="text-5xl md:text-6xl mb-3">🧼🧫💥</div>
+                <h1 class="text-3xl md:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-300 to-sky-400 mb-2">
+                    食安特警：消滅病原菌！
+                </h1>
+                <p class="text-slate-300 text-sm md:text-base mb-6">
+                    站在鏡頭前，用你的雙手用力「揮拳擊破」畫面上出現的有害致病菌！擊中酒精還能獲得全螢幕消毒防護！
+                </p>
+
+                <!-- 病原菌圖鑑簡介 -->
+                <div class="grid grid-cols-4 gap-2 mb-6 bg-slate-800/80 p-3 rounded-2xl border border-slate-700 text-xs">
+                    <div class="flex flex-col items-center">
+                        <span class="text-2xl mb-1">🦠</span>
+                        <span class="font-bold text-amber-300">諾羅病毒</span>
+                        <span class="text-slate-400 text-[10px]">+100分</span>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <span class="text-2xl mb-1">🧫</span>
+                        <span class="font-bold text-rose-300">沙門氏菌</span>
+                        <span class="text-slate-400 text-[10px]">+150分</span>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <span class="text-2xl mb-1">👾</span>
+                        <span class="font-bold text-purple-300">葡萄球菌</span>
+                        <span class="text-slate-400 text-[10px]">+200分</span>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <span class="text-2xl mb-1">🧴</span>
+                        <span class="font-bold text-cyan-300">消毒酒精</span>
+                        <span class="text-emerald-400 text-[10px]">+250雙倍</span>
+                    </div>
+                </div>
+
+                <!-- 現場設備設定選單 -->
+                <div class="bg-slate-900/90 rounded-2xl p-4 mb-6 text-left border border-slate-700/80 space-y-3">
+                    <div class="flex items-center justify-between text-sm">
+                        <span class="text-slate-300 font-semibold flex items-center">📷 視訊鏡頭選擇</span>
+                        <select id="cameraSelect" class="bg-slate-800 text-white border border-slate-600 rounded-lg px-3 py-1.5 text-xs focus:ring-2 focus:ring-emerald-400 outline-none">
+                            <option value="user">前置自拍鏡頭 (面向挑戰者)</option>
+                            <option value="environment">後置主鏡頭 (iPad外拍模式)</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center justify-between text-sm">
+                        <span class="text-slate-300 font-semibold flex items-center">⏱️ 單局挑戰時長</span>
+                        <div class="flex space-x-2">
+                            <button type="button" class="duration-btn bg-emerald-600 text-white px-3 py-1 rounded-lg text-xs font-bold" data-dur="30">30秒</button>
+                            <button type="button" class="duration-btn bg-slate-800 text-slate-300 px-3 py-1 rounded-lg text-xs font-bold" data-dur="45">45秒</button>
+                            <button type="button" class="duration-btn bg-slate-800 text-slate-300 px-3 py-1 rounded-lg text-xs font-bold" data-dur="60">60秒</button>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between text-sm">
+                        <span class="text-slate-300 font-semibold">⚡ 體感揮手靈敏度</span>
+                        <input id="sensitivitySlider" type="range" min="15" max="50" value="28" class="w-32 accent-emerald-400 cursor-pointer">
+                    </div>
+                </div>
+
+                <!-- 開始按鈕 -->
+                <button id="startGameBtn" class="w-full bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 hover:from-emerald-400 hover:to-sky-400 text-slate-950 font-black text-xl py-4 rounded-2xl shadow-xl transform active:scale-95 transition-all flex items-center justify-center space-x-2">
+                    <span>開始食安體感挑戰！</span>
+                    <span class="text-2xl">⚡</span>
+                </button>
+                <div class="mt-3 text-xs text-slate-400">※ 提示：請允許瀏覽器取用相機權限以啟動體感偵測</div>
+            </div>
+        </div>
+
+        <!-- 遊戲結束結算畫面 Result Modal -->
+        <div id="resultModal" class="hidden absolute inset-0 z-40 bg-slate-950/90 backdrop-blur-lg flex items-center justify-center p-6">
+            <div class="max-w-lg w-full bg-gradient-to-b from-slate-900 to-slate-800 border-4 border-amber-400/80 rounded-3xl p-8 text-center shadow-2xl relative">
+                <div class="text-6xl mb-2" id="rankMedal">🏆</div>
+                <div class="text-xs uppercase font-extrabold tracking-widest text-amber-400">食安特警榮譽勳章</div>
+                <h2 id="rankTitle" class="text-3xl font-black text-white mt-1 mb-4">一級特等食安衛士</h2>
+
+                <!-- 戰績卡 -->
+                <div class="bg-slate-950/70 border border-slate-700/80 rounded-2xl p-5 mb-5 space-y-3">
+                    <div class="flex justify-between items-center text-slate-300">
+                        <span>總擊潰分數</span>
+                        <span id="finalScore" class="font-num text-3xl font-black text-amber-300">0</span>
+                    </div>
+                    <div class="flex justify-between items-center text-slate-300 border-t border-slate-800 pt-2">
+                        <span>成功擊破病原體</span>
+                        <span id="finalKills" class="font-num text-2xl font-bold text-emerald-400">0 個</span>
+                    </div>
+                    <div class="flex justify-between items-center text-slate-300 border-t border-slate-800 pt-2">
+                        <span>最高連續連擊 (Combo)</span>
+                        <span id="finalCombo" class="font-num text-2xl font-bold text-sky-400">0 次</span>
+                    </div>
+                </div>
+
+                <!-- 隨機食安教育金句 -->
+                <div class="bg-sky-950/50 border border-sky-600/40 rounded-xl p-3.5 mb-6 text-sm text-sky-200">
+                    <div class="font-bold text-sky-400 mb-1">【食安特警小叮嚀】</div>
+                    <p id="resultTip">處理生肉與熟食務必使用不同刀具砧板，避免交叉污染！</p>
+                </div>
+
+                <!-- 再次挑戰按鈕 -->
+                <button id="restartGameBtn" class="w-full bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 font-black text-xl py-4 rounded-2xl shadow-xl transform active:scale-95 transition-all">
+                    下一位挑戰者上陣 🚀
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+    /**
+     * Web Audio API 音效合成引擎 (免下載任何音效檔，iPad 不會發生 404/跨域載入失敗)
+     */
+    class SoundEngine {
+        constructor() {
+            this.ctx = null;
+            this.enabled = true;
+        }
+
+        init() {
+            if (!this.ctx) {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                this.ctx = new AudioCtx();
+            }
+            if (this.ctx.state === 'suspended') {
+                this.ctx.resume();
+            }
+        }
+
+        playHit() {
+            if (!this.enabled || !this.ctx) return;
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(320, now);
+            osc.frequency.exponentialRampToValueAtTime(80, now + 0.15);
+
+            gain.gain.setValueAtTime(0.4, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+
+            osc.start(now);
+            osc.stop(now + 0.15);
+        }
+
+        playBonus() {
+            if (!this.enabled || !this.ctx) return;
+            const now = this.ctx.currentTime;
+            [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, now + i * 0.05);
+                gain.gain.setValueAtTime(0.25, now + i * 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.05 + 0.2);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now + i * 0.05);
+                osc.stop(now + i * 0.05 + 0.2);
+            });
+        }
+
+        playCombo() {
+            if (!this.enabled || !this.ctx) return;
+            const now = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(440, now);
+            osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
+            gain.gain.setValueAtTime(0.15, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.12);
+        }
+
+        playGameOver() {
+            if (!this.enabled || !this.ctx) return;
+            const notes = [440, 554, 659, 880];
+            const now = this.ctx.currentTime;
+            notes.forEach((freq, idx) => {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+                gain.gain.setValueAtTime(0.3, now + idx * 0.12);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.12 + 0.4);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now + idx * 0.12);
+                osc.stop(now + idx * 0.12 + 0.4);
+            });
+        }
+    }
+
+    const sound = new SoundEngine();
+
+    /**
+     * 食安病原體與健康道具定義清單
+     */
+    const TARGET_TYPES = [
+        {
+            id: 'noro',
+            name: '諾羅病毒',
+            sub: '生食貝類最常見',
+            points: 100,
+            color: '#f59e0b', // amber
+            eyeColor: '#78350f',
+            tentacles: 8,
+            shape: 'round',
+            weight: 35
+        },
+        {
+            id: 'salmonella',
+            name: '沙門氏菌',
+            sub: '蛋肉未熟最危險',
+            points: 150,
+            color: '#f43f5e', // rose
+            eyeColor: '#881337',
+            tentacles: 12,
+            shape: 'rod',
+            weight: 30
+        },
+        {
+            id: 'staph',
+            name: '金黃色葡萄球菌',
+            sub: '手部傷口污染',
+            points: 200,
+            color: '#a855f7', // purple
+            eyeColor: '#581c87',
+            tentacles: 14,
+            shape: 'cluster',
+            weight: 20
+        },
+        {
+            id: 'alcohol',
+            name: '75%消毒酒精',
+            sub: '食安防護急先鋒！',
+            points: 250,
+            color: '#06b6d4', // cyan
+            eyeColor: '#ffffff',
+            isBonus: true,
+            weight: 15
+        }
+    ];
+
+    const FOOD_TIPS = [
+        "料理前後徹底以肥皂洗手至少20秒，杜絕病原菌！",
+        "處理生食與熟食之刀具、砧板應嚴格分開標色！",
+        "烹調食物核心溫度務必達到 75°C 以上徹底加熱！",
+        "生鮮食材購回後請儘速冷藏於 7°C 以下，防止細菌孳生！",
+        "手部有傷口時，請勿直接接觸熟食以避免金黃色葡萄球菌！",
+        "貝類海鮮務必煮熟再食用，是預防諾羅病毒的最佳法寶！",
+        "在外用餐選擇衛生優良餐廳，守護全家人腸胃健康！"
+    ];
+
+    const DOM = {
+        video: document.getElementById('webcam'),
+        motionCanvas: document.getElementById('motionCanvas'),
+        displayCanvas: document.getElementById('displayCanvas'),
+        startModal: document.getElementById('startModal'),
+        resultModal: document.getElementById('resultModal'),
+        startGameBtn: document.getElementById('startGameBtn'),
+        restartGameBtn: document.getElementById('restartGameBtn'),
+        scoreLabel: document.getElementById('scoreLabel'),
+        timeLabel: document.getElementById('timeLabel'),
+        comboBadge: document.getElementById('comboBadge'),
+        comboVal: document.getElementById('comboVal'),
+        motionMeter: document.getElementById('motionMeter'),
+        tipBanner: document.getElementById('tipBanner'),
+        finalScore: document.getElementById('finalScore'),
+        finalKills: document.getElementById('finalKills'),
+        finalCombo: document.getElementById('finalCombo'),
+        rankMedal: document.getElementById('rankMedal'),
+        rankTitle: document.getElementById('rankTitle'),
+        resultTip: document.getElementById('resultTip'),
+        cameraSelect: document.getElementById('cameraSelect'),
+        sensitivitySlider: document.getElementById('sensitivitySlider'),
+        toggleSoundBtn: document.getElementById('toggleSoundBtn'),
+    };
+
+    const dCtx = DOM.displayCanvas.getContext('2d');
+    const mCtx = DOM.motionCanvas.getContext('2d', { willReadFrequently: true });
+
+    // 遊戲執行狀態
+    let gameState = {
+        active: false,
+        duration: 30,
+        timeLeft: 30,
+        score: 0,
+        kills: 0,
+        combo: 0,
+        maxCombo: 0,
+        lastSpawn: 0,
+        spawnInterval: 950, // 產生間隔 (毫秒)
+        maxTargets: 4,
+        sensitivity: 28, // 像素變化差閾值
+        facingMode: 'user',
+        stream: null,
+        prevFrameData: null,
+        targets: [],
+        particles: [],
+        floatingTexts: []
+    };
+
+    // 視訊鏡頭解析度低開銷設定 (供背景動作偵測，維持 iPad 60fps 不發燙)
+    const MOTION_W = 160;
+    const MOTION_H = 120;
+    DOM.motionCanvas.width = MOTION_W;
+    DOM.motionCanvas.height = MOTION_H;
+
+    async function initCamera() {
+        if (gameState.stream) {
+            gameState.stream.getTracks().forEach(t => t.stop());
+        }
+
+        const constraints = {
+            audio: false,
+            video: {
+                facingMode: gameState.facingMode,
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        };
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            gameState.stream = stream;
+            DOM.video.srcObject = stream;
+            await DOM.video.play();
+            resizeCanvas();
+            return true;
+        } catch (err) {
+            console.error("Camera init error:", err);
+            // 彈性回退 (若指定鏡頭失敗則嘗試任意鏡頭)
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                gameState.stream = stream;
+                DOM.video.srcObject = stream;
+                await DOM.video.play();
+                resizeCanvas();
+                return true;
+            } catch (fallbackErr) {
+                alert("無法啟動相機。請確認瀏覽器相機使用授權已開啟。");
+                return false;
+            }
+        }
+    }
+
+    function resizeCanvas() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        DOM.displayCanvas.width = w;
+        DOM.displayCanvas.height = h;
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    class Target {
+        constructor(w, h) {
+            // 根據權重隨機挑選病原菌
+            const rand = Math.random() * 100;
+            let acc = 0;
+            let chosen = TARGET_TYPES[0];
+            for (let t of TARGET_TYPES) {
+                acc += t.weight;
+                if (rand <= acc) {
+                    chosen = t;
+                    break;
+                }
+            }
+
+            this.type = chosen;
+            this.radius = Math.min(w, h) * (chosen.isBonus ? 0.08 : 0.095);
+            // 隨機放置在螢幕合理有效打擊範圍 (避開邊緣與頂端HUD)
+            const margin = this.radius * 1.5;
+            this.x = margin + Math.random() * (w - margin * 2);
+            this.y = h * 0.22 + Math.random() * (h * 0.65 - margin);
+
+            this.birth = performance.now();
+            this.lifeSpan = chosen.isBonus ? 2800 : 3600; // 存活時間 (毫秒)
+            this.pulse = 0;
+            this.isHit = false;
+        }
+
+        draw(ctx) {
+            const age = performance.now() - this.birth;
+            const progress = age / this.lifeSpan;
+            if (progress >= 1) return;
+
+            // 出生縮放動畫
+            const enterScale = Math.min(1, age / 250);
+            const scale = enterScale * (1 + Math.sin(age * 0.008) * 0.06);
+
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.scale(scale, scale);
+
+            // 倒數光環計時器 (提示民眾即將溜走)
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius + 12, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - progress));
+            ctx.strokeStyle = this.type.isBonus ? '#22d3ee' : '#f87171';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            // 病毒 / 道具外發光底圈
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.type.color;
+            ctx.shadowColor = this.type.color;
+            ctx.shadowBlur = 18;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // 繪製病毒觸角或瓶身外觀
+            if (this.type.isBonus) {
+                // 酒精消毒瓶繪製
+                ctx.fillStyle = '#ffffff';
+                ctx.font = `${this.radius * 0.9}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('🧴', 0, -2);
+            } else {
+                // 病毒擬人化造型 (帶有眼睛與表情，增加趣味性)
+                ctx.fillStyle = '#ffffff';
+                const eyeOff = this.radius * 0.28;
+                // 大眼睛
+                ctx.beginPath();
+                ctx.arc(-eyeOff, -eyeOff, this.radius * 0.24, 0, Math.PI * 2);
+                ctx.arc(eyeOff, -eyeOff, this.radius * 0.24, 0, Math.PI * 2);
+                ctx.fill();
+                // 黑色眼珠
+                ctx.fillStyle = this.type.eyeColor;
+                ctx.beginPath();
+                ctx.arc(-eyeOff + Math.sin(age * 0.01) * 2, -eyeOff, this.radius * 0.12, 0, Math.PI * 2);
+                ctx.arc(eyeOff + Math.sin(age * 0.01) * 2, -eyeOff, this.radius * 0.12, 0, Math.PI * 2);
+                ctx.fill();
+                // 頑皮嘴巴
+                ctx.beginPath();
+                ctx.arc(0, this.radius * 0.18, this.radius * 0.3, 0, Math.PI);
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+
+            // 名稱標籤
+            ctx.font = `bold ${Math.max(14, this.radius * 0.32)}px 'Noto Sans TC'`;
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.fillText(this.type.name, 0, this.radius + 28);
+
+            // 分數標籤
+            ctx.font = `bold ${Math.max(12, this.radius * 0.24)}px sans-serif`;
+            ctx.fillStyle = '#fde047';
+            ctx.fillText(`+${this.type.points}`, 0, this.radius + 46);
+
+            ctx.restore();
+        }
+    }
+
+    function spawnExplosion(x, y, color) {
+        const count = 18;
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 2 + Math.random() * 7;
+            gameState.particles.push({
+                x: x,
+                y: y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                radius: 4 + Math.random() * 6,
+                color: color,
+                alpha: 1,
+                decay: 0.025 + Math.random() * 0.02
+            });
+        }
+    }
+
+    function spawnFloatingText(text, x, y, color) {
+        gameState.floatingTexts.push({
+            text: text,
+            x: x,
+            y: y,
+            vy: -2.5,
+            alpha: 1,
+            color: color
+        });
+    }
+
+    /**
+     * 核心演算法：雙畫布差分動作偵測 (Frame Differencing)
+     * 計算相鄰兩影格的像素變化，判斷玩家是否在目標區域揮手/揮拳
+     */
+    function detectMotionAndHits() {
+        if (!DOM.video.videoWidth) return;
+
+        // 將即時視訊繪製到縮小版分析畫布 (160x120)
+        mCtx.drawImage(DOM.video, 0, 0, MOTION_W, MOTION_H);
+        const currentFrame = mCtx.getImageData(0, 0, MOTION_W, MOTION_H);
+
+        let totalMotionScore = 0;
+        let activeAreaMotion = 0;
+
+        if (gameState.prevFrameData) {
+            const curr = currentFrame.data;
+            const prev = gameState.prevFrameData.data;
+            const len = curr.length;
+            const threshold = gameState.sensitivity;
+
+            // 建立簡易動態熱度矩陣
+            const motionMap = new Uint8Array(MOTION_W * MOTION_H);
+
+            for (let i = 0; i < len; i += 4) {
+                // 亮度差異計算
+                const diff = Math.abs(curr[i] - prev[i]) +
+                             Math.abs(curr[i + 1] - prev[i + 1]) +
+                             Math.abs(curr[i + 2] - prev[i + 2]);
+                const pixelIndex = i / 4;
+                if (diff > threshold * 3) {
+                    motionMap[pixelIndex] = 1;
+                    totalMotionScore++;
+                }
+            }
+
+            // 更新即時靈敏度指示條
+            const ratio = Math.min(100, (totalMotionScore / (MOTION_W * MOTION_H * 0.15)) * 100);
+            DOM.motionMeter.style.width = `${ratio}%`;
+
+            // 若在遊戲中，檢查每一個活躍目標所在區域的揮動幅度
+            if (gameState.active) {
+                const screenW = DOM.displayCanvas.width;
+                const screenH = DOM.displayCanvas.height;
+
+                for (let i = gameState.targets.length - 1; i >= 0; i--) {
+                    const t = gameState.targets[i];
+                    if (t.isHit) continue;
+
+                    // 轉換目標在分析畫布上的對應座標 (注意前鏡頭鏡像反轉)
+                    const targetX = gameState.facingMode === 'user' ? (screenW - t.x) : t.x;
+                    const mx = Math.floor((targetX / screenW) * MOTION_W);
+                    const my = Math.floor((t.y / screenH) * MOTION_H);
+                    const mr = Math.floor((t.radius / screenW) * MOTION_W * 1.2);
+
+                    let hitsDetected = 0;
+                    const samples = (mr * 2) * (mr * 2);
+
+                    // 抽樣檢查目標圓形區域內的動作像素點數量
+                    for (let dy = -mr; dy <= mr; dy += 2) {
+                        for (let dx = -mr; dx <= mr; dx += 2) {
+                            if (dx * dx + dy * dy <= mr * mr) {
+                                const px = mx + dx;
+                                const py = my + dy;
+                                if (px >= 0 && px < MOTION_W && py >= 0 && py < MOTION_H) {
+                                    if (motionMap[py * MOTION_W + px]) {
+                                        hitsDetected++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 若目標區域有足夠強烈的揮動，觸發擊破！
+                    const hitDensity = hitsDetected / (samples * 0.25 || 1);
+                    if (hitDensity > 0.18) {
+                        triggerHit(t);
+                    }
+                }
+            }
+        }
+
+        // 保存目前影格以供下一偵比對
+        gameState.prevFrameData = currentFrame;
+    }
+
+    function triggerHit(target) {
+        if (target.isHit) return;
+        target.isHit = true;
+
+        gameState.kills++;
+        gameState.combo++;
+        if (gameState.combo > gameState.maxCombo) {
+            gameState.maxCombo = gameState.combo;
+        }
+
+        // 連擊加成計算
+        const comboBonus = Math.floor(gameState.combo / 3) * 50;
+        const totalGain = target.type.points + comboBonus;
+        gameState.score += totalGain;
+
+        // 特效與音效
+        spawnExplosion(target.x, target.y, target.type.color);
+        const hitMsg = gameState.combo > 2 ? `+${totalGain} 🔥x${gameState.combo}` : `+${totalGain}`;
+        spawnFloatingText(hitMsg, target.x, target.y, target.type.color);
+
+        if (target.type.isBonus) {
+            sound.playBonus();
+            // 75%酒精全場消毒效果：同時擊破目前畫面所有病毒
+            gameState.targets.forEach(other => {
+                if (other !== target && !other.isHit) {
+                    other.isHit = true;
+                    gameState.score += other.type.points;
+                    spawnExplosion(other.x, other.y, other.type.color);
+                    spawnFloatingText("全面消毒! +" + other.type.points, other.x, other.y, '#38bdf8');
+                }
+            });
+        } else {
+            sound.playHit();
+            if (gameState.combo % 3 === 0) sound.playCombo();
+        }
+
+        updateHUD();
+    }
+
+    function updateHUD() {
+        DOM.scoreLabel.innerText = gameState.score;
+        DOM.timeLabel.innerText = Math.ceil(gameState.timeLeft);
+
+        if (gameState.combo >= 2) {
+            DOM.comboBadge.classList.remove('hidden');
+            DOM.comboVal.innerText = gameState.combo;
+        } else {
+            DOM.comboBadge.classList.add('hidden');
+        }
+    }
+
+    // 支援觸控螢幕備援：若小朋友太矮或站在 iPad 旁邊，直接點擊螢幕也能玩！
+    DOM.displayCanvas.addEventListener('pointerdown', (e) => {
+        sound.init();
+        if (!gameState.active) return;
+        const rect = DOM.displayCanvas.getBoundingClientRect();
+        const clientX = e.clientX - rect.left;
+        const clientY = e.clientY - rect.top;
+
+        gameState.targets.forEach(t => {
+            if (!t.isHit) {
+                const dist = Math.hypot(t.x - clientX, t.y - clientY);
+                if (dist <= t.radius * 1.3) {
+                    triggerHit(t);
+                }
+            }
+        });
+    });
+
+    let lastTime = performance.now();
+
+    function renderGameLoop(now) {
+        requestAnimationFrame(renderGameLoop);
+        const delta = (now - lastTime) / 1000;
+        lastTime = now;
+
+        const w = DOM.displayCanvas.width;
+        const h = DOM.displayCanvas.height;
+
+        // 1. 繪製攝影鏡頭視訊畫面 (加暗半透明層，突顯病毒目標)
+        if (DOM.video.readyState >= 2) {
+            dCtx.save();
+            if (gameState.facingMode === 'user') {
+                dCtx.translate(w, 0);
+                dCtx.scale(-1, 1); // 鏡像翻轉，猶如大鏡子
+            }
+            dCtx.drawImage(DOM.video, 0, 0, w, h);
+            dCtx.restore();
+
+            // 柔和暗色半透明疊層提升遊戲對比度
+            dCtx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+            dCtx.fillRect(0, 0, w, h);
+
+            // 進行影像動態計算
+            detectMotionAndHits();
+        } else {
+            dCtx.fillStyle = '#0f172a';
+            dCtx.fillRect(0, 0, w, h);
+        }
+
+        // 若非進行中狀態，直接結束後續目標繪製
+        if (!gameState.active) return;
+
+        // 2. 倒數計時更新
+        gameState.timeLeft -= delta;
+        if (gameState.timeLeft <= 0) {
+            gameState.timeLeft = 0;
+            endGame();
+            return;
+        }
+        DOM.timeLabel.innerText = Math.ceil(gameState.timeLeft);
+
+        // 3. 病原菌生命週期管理與產生
+        if (now - gameState.lastSpawn > gameState.spawnInterval && gameState.targets.length < gameState.maxTargets) {
+            gameState.targets.push(new Target(w, h));
+            gameState.lastSpawn = now;
+            // 隨時間稍微加快產生速度，增添現場緊張感
+            gameState.spawnInterval = Math.max(650, 950 - (gameState.duration - gameState.timeLeft) * 8);
+        }
+
+        // 清理超時或被消滅的目標 (超時則中斷連擊)
+        for (let i = gameState.targets.length - 1; i >= 0; i--) {
+            const t = gameState.targets[i];
+            const age = now - t.birth;
+            if (t.isHit || age >= t.lifeSpan) {
+                if (!t.isHit) {
+                    gameState.combo = 0; // 沒打到病毒溜走，連擊歸零
+                    updateHUD();
+                }
+                gameState.targets.splice(i, 1);
+            }
+        }
+
+        // 4. 繪製所有目標
+        gameState.targets.forEach(t => t.draw(dCtx));
+
+        // 5. 繪製爆破粒子
+        for (let i = gameState.particles.length - 1; i >= 0; i--) {
+            const p = gameState.particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.alpha -= p.decay;
+            if (p.alpha <= 0) {
+                gameState.particles.splice(i, 1);
+                continue;
+            }
+            dCtx.save();
+            dCtx.globalAlpha = p.alpha;
+            dCtx.fillStyle = p.color;
+            dCtx.beginPath();
+            dCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+            dCtx.fill();
+            dCtx.restore();
+        }
+
+        // 6. 繪製飄浮分數文字
+        for (let i = gameState.floatingTexts.length - 1; i >= 0; i--) {
+            const ft = gameState.floatingTexts[i];
+            ft.y += ft.vy;
+            ft.alpha -= 0.025;
+            if (ft.alpha <= 0) {
+                gameState.floatingTexts.splice(i, 1);
+                continue;
+            }
+            dCtx.save();
+            dCtx.globalAlpha = ft.alpha;
+            dCtx.font = "bold 26px 'Fredoka One', 'Noto Sans TC', sans-serif";
+            dCtx.fillStyle = ft.color;
+            dCtx.textAlign = 'center';
+            dCtx.shadowColor = '#000000';
+            dCtx.shadowBlur = 8;
+            dCtx.fillText(ft.text, ft.x, ft.y);
+            dCtx.restore();
+        }
+    }
+
+    async function startGame() {
+        sound.init();
+        DOM.startModal.classList.add('hidden');
+        DOM.resultModal.classList.add('hidden');
+
+        // 重設狀態
+        gameState.timeLeft = gameState.duration;
+        gameState.score = 0;
+        gameState.kills = 0;
+        gameState.combo = 0;
+        gameState.maxCombo = 0;
+        gameState.targets = [];
+        gameState.particles = [];
+        gameState.floatingTexts = [];
+        gameState.lastSpawn = performance.now();
+        gameState.active = true;
+
+        updateHUD();
+    }
+
+    function endGame() {
+        gameState.active = false;
+        sound.playGameOver();
+
+        // 計算榮譽勳章與稱號
+        let medal = '🥉';
+        let title = '食安實習生';
+        if (gameState.score >= 3500) {
+            medal = '👑';
+            title = '傳奇特級食安守護神！';
+        } else if (gameState.score >= 2200) {
+            medal = '🥇';
+            title = '一級特等食安衛士！';
+        } else if (gameState.score >= 1200) {
+            medal = '🥈';
+            title = '合格食安打擊先鋒！';
+        }
+
+        DOM.rankMedal.innerText = medal;
+        DOM.rankTitle.innerText = title;
+        DOM.finalScore.innerText = gameState.score;
+        DOM.finalKills.innerText = `${gameState.kills} 個`;
+        DOM.finalCombo.innerText = `${gameState.maxCombo} 次`;
+        DOM.resultTip.innerText = FOOD_TIPS[Math.floor(Math.random() * FOOD_TIPS.length)];
+
+        DOM.resultModal.classList.remove('hidden');
+    }
+
+    // 開始與重試按鈕
+    DOM.startGameBtn.addEventListener('click', startGame);
+    DOM.restartGameBtn.addEventListener('click', () => {
+        DOM.resultModal.classList.add('hidden');
+        DOM.startModal.classList.remove('hidden');
+    });
+
+    // 鏡頭切換
+    DOM.cameraSelect.addEventListener('change', async (e) => {
+        gameState.facingMode = e.target.value;
+        await initCamera();
+    });
+
+    // 靈敏度拉桿
+    DOM.sensitivitySlider.addEventListener('input', (e) => {
+        gameState.sensitivity = parseInt(e.target.value);
+    });
+
+    // 挑戰秒數切換按鈕
+    document.querySelectorAll('.duration-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.duration-btn').forEach(b => {
+                b.classList.remove('bg-emerald-600', 'text-white');
+                b.classList.add('bg-slate-800', 'text-slate-300');
+            });
+            btn.classList.add('bg-emerald-600', 'text-white');
+            btn.classList.remove('bg-slate-800', 'text-slate-300');
+            gameState.duration = parseInt(btn.dataset.dur);
+            gameState.timeLeft = gameState.duration;
+            DOM.timeLabel.innerText = gameState.duration;
+        });
+    });
+
+    // 音效開關切換
+    DOM.toggleSoundBtn.addEventListener('click', () => {
+        sound.init();
+        sound.enabled = !sound.enabled;
+        DOM.toggleSoundBtn.innerText = sound.enabled ? '🔊' : '🔇';
+    });
+
+    // 定期輪播食安小知識
+    setInterval(() => {
+        DOM.tipBanner.innerText = FOOD_TIPS[Math.floor(Math.random() * FOOD_TIPS.length)];
+    }, 6000);
+
+    window.onload = async function() {
+        // 啟動相機
+        await initCamera();
+        // 啟動主渲染動態循環
+        requestAnimationFrame(renderGameLoop);
+    };
+    </script>
+</body>
+</html>
